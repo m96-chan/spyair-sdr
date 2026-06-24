@@ -57,11 +57,15 @@ GPS/IP → Locator → Planner (← spyair.db) → Scanner → Audio / TUI / Whi
 |--------|--------|-------|
 | `error` | ✅ | Crate-wide `Error`, incl. `NotImplemented`. |
 | `geo` | ✅ | `GeoPosition`, haversine, VHF radio-horizon model. |
-| `location` | ✅ (manual) | `LocationSource` trait; GPS/IP are `NotImplemented` stubs. |
+| `location` | ✅ (manual) | `LocationSource` trait; live GPS/IP backends are `NotImplemented` stubs. |
+| `gps` | ✅ | NMEA 0183 parsing + fix resolution; serial/device I/O is a `NotImplemented` stub. |
+| `ipgeo` | ✅ | IP-geolocation response parsing + provider boundary; HTTP transport is a `NotImplemented` stub. |
 | `freqdb` | ✅ | Service EN/JP mapping, OurAirports→SQLite, `build-db` binary. |
 | `planner` | ✅ | Receivability scoring + in-range filtering. |
 | `dsp` | ✅ | AM/FM demod, squelch with hysteresis. Pure math. |
 | `scanner` | ✅ | Channel-hop/hold/priority/lockout state machine over a `trait SdrSource`. |
+| `adsb` | ✅ | Pure dump1090 `aircraft.json` parse + ATC-frequency correlation heuristic; live HTTP fetch is out of scope (issue #16). |
+| `audio` | ✅ | `AudioSink` trait + WAV recorder; real device playback is a `NotImplemented` stub. |
 | `tui` | ✅ | `ratatui` `TestBackend` rendering (now-playing, watchlist, EQ/waterfall, device picker). |
 | `sdr` | ✅ | Device model + selection policy + `SdrEnumerator` trait; real enumerator is a `NotImplemented` stub. |
 | Hardware/external | 🔒 | RTL-SDR I/O, audio out, GPS, IP geo, Whisper, RepeaterBook, live ADS-B — trait + `NotImplemented`, tracked individually. |
