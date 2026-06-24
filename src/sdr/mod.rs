@@ -12,7 +12,11 @@
 
 mod rtlsdr;
 
-pub use rtlsdr::{decode_rtl_iq, RtlSdrSource};
+#[cfg(feature = "rtlsdr")]
+pub use rtlsdr::RtlSdrDevice;
+pub use rtlsdr::{
+    decode_rtl_iq, iq_pairs_to_bytes, RtlSdrSource, DEFAULT_BLOCK_IQ_PAIRS, DEFAULT_SAMPLE_RATE_HZ,
+};
 
 use crate::error::{Error, Result};
 use crate::scanner::SdrSource;
@@ -168,22 +172,69 @@ pub fn select<E: SdrEnumerator>(
     resolve(&devices, selector)
 }
 
-/// The real RTL-SDR enumeration backend (librtlsdr / SoapySDR). **Not implemented** — requires a
-/// physical dongle; tracked in #10. Returns [`Error::NotImplemented`], never a fabricated list.
+/// The real RTL-SDR enumeration backend (librtlsdr).
+///
+/// In the **default build** (no `rtlsdr` Cargo feature) there is no librtlsdr binding linked in,
+/// so both methods return [`Error::NotImplemented`] — never a fabricated device list. Under
+/// `--features rtlsdr` the methods talk to the system librtlsdr: [`SdrEnumerator::list`] reports
+/// the connected dongles (index, name, serial, tuner) and [`SdrEnumerator::open`] opens one into a
+/// real [`RtlSdrDevice`]. All data comes from the hardware.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct RtlSdrEnumerator;
 
+#[cfg(not(feature = "rtlsdr"))]
 impl SdrEnumerator for RtlSdrEnumerator {
     fn list(&self) -> Result<Vec<SdrDeviceInfo>> {
         Err(Error::NotImplemented(
-            "RTL-SDR device enumeration requires librtlsdr + hardware",
+            "RTL-SDR device enumeration requires the `rtlsdr` Cargo feature + librtlsdr + hardware",
         ))
     }
 
     fn open(&self, _device: &SdrDeviceInfo) -> Result<Box<dyn SdrSource>> {
         Err(Error::NotImplemented(
-            "opening an RTL-SDR device requires librtlsdr + hardware",
+            "opening an RTL-SDR device requires the `rtlsdr` Cargo feature + librtlsdr + hardware",
         ))
+    }
+}
+
+#[cfg(feature = "rtlsdr")]
+impl SdrEnumerator for RtlSdrEnumerator {
+    fn list(&self) -> Result<Vec<SdrDeviceInfo>> {
+        // `::rtlsdr` is the external binding crate; `rtlsdr` (no prefix) would resolve to the
+        // sibling submodule of the same name.
+        let count = ::rtlsdr::get_device_count();
+        if count <= 0 {
+            return Ok(Vec::new());
+        }
+        let mut devices = Vec::with_capacity(count as usize);
+        for index in 0..count {
+            let name = ::rtlsdr::get_device_name(index);
+            // USB strings (incl. serial) may be unavailable while a device is busy; treat that as
+            // an empty serial rather than failing the whole enumeration.
+            let serial = ::rtlsdr::get_device_usb_strings(index)
+                .map(|s| s.serial)
+                .unwrap_or_default();
+            // Tuner type requires opening the device, which can fail if it is busy; leave the
+            // tuner blank in that case rather than fabricating one.
+            let tuner = match ::rtlsdr::open(index) {
+                Ok(mut dev) => dev.get_tuner_type().1,
+                Err(_) => String::new(),
+            };
+            let device_index = u32::try_from(index)
+                .map_err(|_| Error::Device(format!("device index {index} out of range")))?;
+            devices.push(SdrDeviceInfo {
+                index: device_index,
+                name,
+                serial,
+                tuner,
+            });
+        }
+        Ok(devices)
+    }
+
+    fn open(&self, device: &SdrDeviceInfo) -> Result<Box<dyn SdrSource>> {
+        let dev = RtlSdrDevice::open(device.index)?;
+        Ok(Box::new(dev))
     }
 }
 
@@ -298,6 +349,9 @@ mod tests {
         assert!(e.open(&dev(0, "AAAA")).is_ok());
     }
 
+    // Default-build only: under `--features rtlsdr` these methods talk to real hardware (and
+    // `open` would touch a device), so this contract is verified manually on hardware instead.
+    #[cfg(not(feature = "rtlsdr"))]
     #[test]
     fn real_enumerator_is_not_implemented() {
         assert!(matches!(

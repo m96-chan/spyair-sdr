@@ -454,6 +454,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "rtlsdr"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "136ba5e46b0edd188e277916fed8f5a7f6810622ec49e03831244f79c7cdfb3e"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "rusqlite"
 version = "0.31.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -591,6 +600,7 @@ dependencies = [
  "csv",
  "num-complex",
  "ratatui",
+ "rtlsdr",
  "rusqlite",
  "serde",
  "serde_json",

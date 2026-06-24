@@ -7,6 +7,12 @@ description = "Location-aware RTL-SDR scanner that figures out what you can hear
 license = "MIT"
 repository = "https://github.com/m96-chan/spyair-sdr"
 
+[features]
+# Enables the real librtlsdr-backed RTL-SDR backend (requires the system librtlsdr
+# shared library + a physical dongle at run time). Off by default so the standard
+# build pulls in zero hardware dependencies and keeps the NotImplemented stubs.
+rtlsdr = ["dep:rtlsdr"]
+
 [dependencies]
 thiserror = "1"
 rusqlite = { version = "0.31", features = ["bundled"] }
@@ -15,6 +21,9 @@ num-complex = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ratatui = "0.28"
+# Optional: Rust bindings to the system librtlsdr (linked via #[link(name = "rtlsdr")]).
+# Only compiled in under `--features rtlsdr`.
+rtlsdr = { version = "0.1.4", optional = true }
 
 [lib]
 name = "spyair_sdr"
