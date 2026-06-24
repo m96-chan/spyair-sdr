@@ -62,13 +62,14 @@ GPS/IP → Locator → Planner (← spyair.db) → Scanner → Audio / TUI / Whi
 | `ipgeo` | ✅ | IP-geolocation response parsing + provider boundary; HTTP transport is a `NotImplemented` stub. |
 | `freqdb` | ✅ | Service EN/JP mapping, OurAirports→SQLite, `build-db` binary. |
 | `planner` | ✅ | Receivability scoring + in-range filtering. |
-| `dsp` | ✅ | AM/FM demod, squelch with hysteresis. Pure math. |
+| `dsp` | ✅ | AM/FM demod, squelch with hysteresis, `power_spectrum` (pure radix-2 FFT). Pure math. |
 | `scanner` | ✅ | Channel-hop/hold/priority/lockout state machine over a `trait SdrSource`. |
 | `adsb` | ✅ | Pure dump1090 `aircraft.json` parse + ATC-frequency correlation heuristic; live HTTP fetch is out of scope (issue #16). |
 | `audio` | ✅ | `AudioSink` trait + WAV recorder; real device playback is a `NotImplemented` stub. |
 | `tui` | ✅ | `ratatui` `TestBackend` rendering (now-playing, watchlist, EQ/waterfall, device picker). |
-| `sdr` | ✅ | Device model + selection policy + `SdrEnumerator` trait; real enumerator is a `NotImplemented` stub. |
-| Hardware/external | 🔒 | RTL-SDR I/O, audio out, GPS, IP geo, Whisper, RepeaterBook, live ADS-B — trait + `NotImplemented`, tracked individually. |
+| `sdr` | ✅ | Device model + selection policy + `SdrEnumerator`. **Real librtlsdr I/O backend** (`RtlSdrDevice`/enumerator) behind the `rtlsdr` Cargo feature; default build keeps `NotImplemented` stubs + the pure `decode_rtl_iq`. |
+| `bin/spyair-tui` | ✅ | Live terminal dashboard. Demo mode by default; **live mode** (real spectrum) under `--features rtlsdr -- --freq <MHz>`. |
+| Hardware/external | 🔒 | Audio out, GPS, IP geo, Whisper, RepeaterBook, live ADS-B — trait + `NotImplemented`, tracked individually. (RTL-SDR I/O is now implemented behind the `rtlsdr` feature.) |
 
 ---
 
@@ -82,7 +83,37 @@ cargo run --bin build-db -- \
   --airports airports.csv \
   --frequencies airport-frequencies.csv \
   --out data/spyair.db           # build the local frequency DB (offline path)
+
+cargo run --bin spyair-tui                                   # TUI dashboard (demo data)
+cargo run --bin spyair-tui --features rtlsdr -- --freq 82.5  # live spectrum from a real dongle
+cargo build --features rtlsdr    # compile the real librtlsdr I/O backend (needs system librtlsdr)
 ```
+
+---
+
+## 4a. Status & remaining work (updated 2026-06-25)
+
+Working end-to-end on real hardware: a live RTL-SDR can be opened, tuned, and its
+spectrum shown in `spyair-tui` (verified on FM broadcast). The real I/O backend lives
+behind the `rtlsdr` feature; the default build stays pure + stubbed.
+
+Done so far: error, geo, location, gps (parse), ipgeo (parse), freqdb, planner, dsp
+(+`power_spectrum`), scanner, adsb (parse+correlate), audio (recorder + stub), tui,
+sdr (selection + **real librtlsdr backend**), `spyair-tui` (demo + live spectrum).
+
+Remaining / next slices:
+- **Live ADS-B validation** of the `adsb` module against real data — blocked: the local
+  1090 MHz feed was dead overnight (only Mode-AC, no DF17). Retry by day; do **not**
+  fabricate aircraft data. (issue #16 covers the live fetch boundary.)
+- **Reception proof for Tokyo Approach 120.5/120.8 MHz** — needs a daytime capture
+  (overnight airband is silent); tuning/capture itself already works.
+- **Scanner wiring**: drive the hop/hold state machine from a live `SdrSource` and surface
+  it in the TUI (watchlist activity, now-playing).
+- **Audio output** (issue #11): real `AudioSink` (cpal/rodio) so demodulated audio is audible.
+- **`power_spectrum` absolute/AGC normalisation** mode (current mode is per-frame-peak, so a
+  flat-noise frame reads as near-full bars).
+- **TUI live device picker** wired to the real `RtlSdrEnumerator` (under the feature).
+- Still hardware/external-blocked: GPS, IP geo, Whisper (#14), RepeaterBook (#15), live ADS-B (#16).
 
 ---
 
