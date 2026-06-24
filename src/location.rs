@@ -76,7 +76,9 @@ impl LocationSource for GpsLocationSource {
 
 /// IP-geolocation fallback source. **Not yet implemented** — requires a runtime network lookup.
 ///
-/// Returns [`Error::NotImplemented`] until the HTTP backend lands.
+/// Returns [`Error::NotImplemented`] until the HTTP backend lands. The response-parsing logic and
+/// transport trait for IP geolocation live in [`crate::ipgeo`]; only the live HTTP transport
+/// ([`crate::ipgeo::HttpIpGeoProvider`]) remains stubbed.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct IpLocationSource;
 
