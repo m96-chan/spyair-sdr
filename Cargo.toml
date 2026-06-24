@@ -1,0 +1,15 @@
+[package]
+name = "spyair-sdr"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.78"
+description = "Location-aware RTL-SDR scanner that figures out what you can hear from where you are."
+license = "MIT"
+repository = "https://github.com/m96-chan/spyair-sdr"
+
+[dependencies]
+thiserror = "1"
+
+[lib]
+name = "spyair_sdr"
+path = "src/lib.rs"
