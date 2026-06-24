@@ -19,12 +19,14 @@ struct Args {
     airports: Option<PathBuf>,
     frequencies: Option<PathBuf>,
     out: PathBuf,
+    airband_only: bool,
 }
 
 fn parse_args() -> std::result::Result<Args, String> {
     let mut airports = None;
     let mut frequencies = None;
     let mut out = PathBuf::from("data/spyair.db");
+    let mut airband_only = false;
 
     let mut it = std::env::args().skip(1);
     while let Some(flag) = it.next() {
@@ -40,6 +42,7 @@ fn parse_args() -> std::result::Result<Args, String> {
                 ))
             }
             "--out" => out = PathBuf::from(it.next().ok_or("--out requires a path")?),
+            "--airband" => airband_only = true,
             "-h" | "--help" => return Err(usage()),
             other => return Err(format!("unknown argument: {other}\n{}", usage())),
         }
@@ -48,12 +51,13 @@ fn parse_args() -> std::result::Result<Args, String> {
         airports,
         frequencies,
         out,
+        airband_only,
     })
 }
 
 fn usage() -> String {
     "usage: build-db [--airports <airports.csv>] [--frequencies <airport-frequencies.csv>] \
-     [--out data/spyair.db]"
+     [--airband] [--out data/spyair.db]"
         .to_string()
 }
 
@@ -73,7 +77,17 @@ fn run(args: Args) -> Result<usize> {
             }
         };
 
-    let channels = ourairports::parse_frequencies(frequencies_reader, &airports_index)?;
+    let mut channels = ourairports::parse_frequencies(frequencies_reader, &airports_index)?;
+
+    if args.airband_only {
+        let before = channels.len();
+        channels.retain(|c| c.is_airband());
+        eprintln!(
+            "build-db: airband filter kept {} of {} channels (118-137 MHz)",
+            channels.len(),
+            before
+        );
+    }
 
     if let Some(parent) = args.out.parent() {
         if !parent.as_os_str().is_empty() {
