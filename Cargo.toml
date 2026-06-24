@@ -32,3 +32,7 @@ path = "src/lib.rs"
 [[bin]]
 name = "build-db"
 path = "src/bin/build_db.rs"
+
+[[bin]]
+name = "spyair-tui"
+path = "src/bin/tui.rs"
