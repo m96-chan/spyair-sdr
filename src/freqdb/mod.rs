@@ -84,3 +84,63 @@ pub struct Channel {
     /// Originating data source.
     pub source: Source,
 }
+
+/// Lower bound of the VHF voice airband (118.000 MHz), in hertz.
+pub const AIRBAND_MIN_HZ: i64 = 118_000_000;
+/// Upper bound of the VHF voice airband (137.000 MHz), in hertz.
+pub const AIRBAND_MAX_HZ: i64 = 137_000_000;
+
+impl Channel {
+    /// Whether this channel's frequency falls within the inclusive band `[min_hz, max_hz]`.
+    pub fn in_band(&self, min_hz: i64, max_hz: i64) -> bool {
+        (min_hz..=max_hz).contains(&self.freq_hz)
+    }
+
+    /// Whether this channel is in the VHF voice airband (118–137 MHz).
+    pub fn is_airband(&self) -> bool {
+        self.in_band(AIRBAND_MIN_HZ, AIRBAND_MAX_HZ)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn chan(freq_hz: i64) -> Channel {
+        Channel {
+            freq_hz,
+            mode: Mode::Am,
+            service: "TWR".into(),
+            ident: None,
+            desc_en: None,
+            desc_jp: None,
+            lat: None,
+            lon: None,
+            elev_m: None,
+            priority: 0,
+            source: Source::OurAirports,
+        }
+    }
+
+    #[test]
+    fn airband_bounds_are_inclusive() {
+        assert!(chan(AIRBAND_MIN_HZ).is_airband());
+        assert!(chan(AIRBAND_MAX_HZ).is_airband());
+        assert!(chan(118_100_000).is_airband()); // Haneda Tower
+    }
+
+    #[test]
+    fn out_of_airband_rejected() {
+        assert!(!chan(117_999_000).is_airband()); // just below
+        assert!(!chan(137_000_001).is_airband()); // just above
+        assert!(!chan(243_000_000).is_airband()); // UHF military guard
+        assert!(!chan(500_000).is_airband()); // HF
+    }
+
+    #[test]
+    fn in_band_custom_range() {
+        let c = chan(156_800_000); // marine ch16
+        assert!(c.in_band(156_000_000, 162_000_000));
+        assert!(!c.in_band(AIRBAND_MIN_HZ, AIRBAND_MAX_HZ));
+    }
+}
