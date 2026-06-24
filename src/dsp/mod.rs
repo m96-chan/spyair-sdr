@@ -149,6 +149,193 @@ pub fn demodulate_nfm(samples: &[Iq]) -> Vec<f32> {
         .collect()
 }
 
+/// Maximum FFT length used by [`power_spectrum`].
+///
+/// The window is the largest power of two **≤** the input length, capped here. The cap
+/// bounds per-frame work and latency: 4096 bins at typical SDR rates (≈2.4 MS/s) already
+/// gives sub-kHz resolution, which is finer than a terminal waterfall can display, so
+/// going larger only costs CPU. Documented and enforced in [`power_spectrum`].
+const MAX_FFT_LEN: usize = 4096;
+
+/// Noise floor, in dB below the per-frame peak bin, that maps to `0.0` in the normalised
+/// spectrum returned by [`power_spectrum`].
+///
+/// Bins at the peak map to `1.0`; bins at or below `peak - FLOOR_DB` map to `0.0`; the
+/// range in between is linear in dB. A value of −80 dB keeps a flat-noise frame visually
+/// distinct from a strong-carrier frame (the carrier saturates near `1.0` while noise sits
+/// low) without crushing all dynamic range.
+const FLOOR_DB: f32 = -80.0;
+
+/// Largest power of two that is `≤ n`, or `0` when `n == 0`.
+fn largest_pow2_le(n: usize) -> usize {
+    if n == 0 {
+        0
+    } else {
+        // Highest set bit of `n`.
+        1usize << (usize::BITS - 1 - n.leading_zeros())
+    }
+}
+
+/// In-place iterative radix-2 Cooley–Tukey FFT over interleaved complex samples held as
+/// `(re, im)` pairs.
+///
+/// `data.len()` **must** be a power of two (callers in this module guarantee this; lengths
+/// `0` and `1` are returned unchanged). The transform is unnormalised:
+/// `X[k] = Σ_n x[n]·exp(-j2π k n / N)`. Pure in-memory math — no allocation beyond the
+/// twiddle recurrence, no I/O.
+fn fft_pow2(data: &mut [(f32, f32)]) {
+    let n = data.len();
+    if n < 2 {
+        return;
+    }
+
+    // Bit-reversal permutation.
+    let mut j = 0usize;
+    for i in 1..n {
+        let mut bit = n >> 1;
+        while j & bit != 0 {
+            j ^= bit;
+            bit >>= 1;
+        }
+        j ^= bit;
+        if i < j {
+            data.swap(i, j);
+        }
+    }
+
+    // Danielson–Lanczos butterflies, doubling the sub-transform length each stage.
+    let mut len = 2usize;
+    while len <= n {
+        let half = len / 2;
+        // Principal twiddle for this stage: exp(-j2π/len).
+        let theta = -2.0 * std::f32::consts::PI / len as f32;
+        let (wstep_re, wstep_im) = (theta.cos(), theta.sin());
+        let mut start = 0usize;
+        while start < n {
+            // Recurrent twiddle w = exp(-j2π k / len), k = 0..half.
+            let (mut w_re, mut w_im) = (1.0f32, 0.0f32);
+            for k in 0..half {
+                let a = data[start + k];
+                let b = data[start + k + half];
+                // t = w * b
+                let t_re = w_re * b.0 - w_im * b.1;
+                let t_im = w_re * b.1 + w_im * b.0;
+                data[start + k] = (a.0 + t_re, a.1 + t_im);
+                data[start + k + half] = (a.0 - t_re, a.1 - t_im);
+                // Advance twiddle: w *= wstep.
+                let nw_re = w_re * wstep_re - w_im * wstep_im;
+                let nw_im = w_re * wstep_im + w_im * wstep_re;
+                w_re = nw_re;
+                w_im = nw_im;
+            }
+            start += len;
+        }
+        len <<= 1;
+    }
+}
+
+/// Compute a normalised, display-ready power spectrum of a complex baseband buffer.
+///
+/// The result has exactly `display_bins` values in `0.0..=1.0`, ordered low→high frequency
+/// with **DC (0 Hz) centred** (negative frequencies on the left, positive on the right),
+/// suitable for driving a waterfall / EQ display. Returns an empty `Vec` when `iq` is empty
+/// or `display_bins == 0`. The mapping is deterministic and NaN/inf-free.
+///
+/// # Pipeline
+/// 1. Pick the FFT length as the largest power of two `≤ iq.len()`, capped at
+///    [`MAX_FFT_LEN`]. Only the first `fft_len` samples are used.
+/// 2. Apply a **Hann window** before the transform. Tapering the frame edges to zero
+///    suppresses spectral leakage (the sidelobes a rectangular window would smear across
+///    bins), so a single carrier shows up as one clean peak rather than a broad skirt.
+/// 3. Take per-bin magnitude² (linear power) and **fftshift** so DC lands in the middle.
+/// 4. Down-bin to `display_bins` columns by averaging contiguous groups of FFT bins. When
+///    `display_bins > fft_len` there are fewer source bins than columns, so each FFT bin is
+///    **replicated** across the columns that map back to it (nearest-source mapping); the
+///    output still has exactly `display_bins` values.
+/// 5. Convert each column to dB relative to the peak column and map linearly to `0.0..=1.0`
+///    with [`FLOOR_DB`] as the `0.0` point (`peak → 1.0`).
+///
+/// # Units
+/// Frequency ordering is in FFT-bin units; this function is sample-rate agnostic. The
+/// caller maps bin index to Hz using the capture sample rate at the display edge.
+#[must_use]
+pub fn power_spectrum(iq: &[Iq], display_bins: usize) -> Vec<f32> {
+    if iq.is_empty() || display_bins == 0 {
+        return Vec::new();
+    }
+
+    let fft_len = largest_pow2_le(iq.len()).min(MAX_FFT_LEN);
+    if fft_len == 0 {
+        return Vec::new();
+    }
+
+    // Hann-windowed copy of the first `fft_len` samples into (re, im) pairs.
+    let mut buf: Vec<(f32, f32)> = Vec::with_capacity(fft_len);
+    if fft_len == 1 {
+        // Degenerate single-sample window: Hann would zero it; pass it through so a
+        // one-sample frame still yields a finite spectrum rather than all-zero.
+        buf.push((iq[0].i, iq[0].q));
+    } else {
+        let denom = (fft_len - 1) as f32;
+        for (n, sample) in iq.iter().take(fft_len).enumerate() {
+            // Hann: w[n] = 0.5 · (1 − cos(2π n / (N−1))).
+            let w = 0.5 * (1.0 - (2.0 * std::f32::consts::PI * n as f32 / denom).cos());
+            buf.push((sample.i * w, sample.q * w));
+        }
+    }
+
+    fft_pow2(&mut buf);
+
+    // Per-bin linear power.
+    let power: Vec<f32> = buf.iter().map(|&(re, im)| re * re + im * im).collect();
+
+    // fftshift: rotate so index 0 (DC) moves to the centre. For length N the new order is
+    // [N/2 .. N) ++ [0 .. N/2), placing negative freqs left and positive right.
+    let mut shifted = vec![0.0f32; fft_len];
+    let half = fft_len / 2;
+    for (k, &p) in power.iter().enumerate() {
+        let dst = (k + (fft_len - half)) % fft_len;
+        shifted[dst] = p;
+    }
+
+    // Down-bin (or replicate) to exactly `display_bins` columns of mean power.
+    let mut columns = vec![0.0f32; display_bins];
+    if display_bins <= fft_len {
+        for (col, slot) in columns.iter_mut().enumerate() {
+            let start = col * fft_len / display_bins;
+            let end = ((col + 1) * fft_len / display_bins).max(start + 1);
+            let slice = &shifted[start..end.min(fft_len)];
+            let mean = slice.iter().sum::<f32>() / slice.len() as f32;
+            *slot = mean;
+        }
+    } else {
+        // Fewer source bins than columns: map each column to its nearest source bin.
+        for (col, slot) in columns.iter_mut().enumerate() {
+            let src = col * fft_len / display_bins;
+            *slot = shifted[src.min(fft_len - 1)];
+        }
+    }
+
+    // dB-relative-to-peak normalisation into 0.0..=1.0, NaN/inf-safe.
+    let peak = columns.iter().copied().fold(0.0f32, f32::max);
+    if peak <= 0.0 || !peak.is_finite() {
+        // All-zero (or non-finite) frame: nothing to show.
+        return vec![0.0f32; display_bins];
+    }
+    let span = -FLOOR_DB; // positive dB span from floor to peak.
+    for slot in &mut columns {
+        let v = *slot;
+        let norm = if v > 0.0 {
+            let db = 10.0 * (v / peak).log10(); // ≤ 0, with peak → 0 dB.
+            ((db - FLOOR_DB) / span).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        *slot = if norm.is_finite() { norm } else { 0.0 };
+    }
+    columns
+}
+
 /// State of a [`Squelch`] gate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SquelchState {
@@ -480,5 +667,205 @@ mod tests {
         }
         // Only crossing the close threshold actually closes it.
         assert!(!sq.update(0.4));
+    }
+
+    // --- FFT primitive ------------------------------------------------------
+
+    /// Magnitude of an interleaved (re, im) bin.
+    fn bin_mag((re, im): (f32, f32)) -> f32 {
+        (re * re + im * im).sqrt()
+    }
+
+    #[test]
+    fn largest_pow2_le_basics() {
+        assert_eq!(largest_pow2_le(0), 0);
+        assert_eq!(largest_pow2_le(1), 1);
+        assert_eq!(largest_pow2_le(2), 2);
+        assert_eq!(largest_pow2_le(3), 2);
+        assert_eq!(largest_pow2_le(5), 4);
+        assert_eq!(largest_pow2_le(4096), 4096);
+        assert_eq!(largest_pow2_le(5000), 4096);
+    }
+
+    #[test]
+    fn fft_len_one_and_two_are_trivial() {
+        // Length 1: unchanged.
+        let mut a = [(3.0f32, -2.0f32)];
+        fft_pow2(&mut a);
+        assert!((a[0].0 - 3.0).abs() < 1e-6 && (a[0].1 + 2.0).abs() < 1e-6);
+
+        // Length 2: X[0] = x0 + x1, X[1] = x0 - x1.
+        let mut b = [(1.0f32, 0.0f32), (2.0f32, 0.0f32)];
+        fft_pow2(&mut b);
+        assert!((b[0].0 - 3.0).abs() < 1e-6 && b[0].1.abs() < 1e-6);
+        assert!((b[1].0 + 1.0).abs() < 1e-6 && b[1].1.abs() < 1e-6);
+    }
+
+    #[test]
+    fn fft_of_impulse_is_flat() {
+        // FFT of [1, 0, 0, ...] → every bin has magnitude 1.
+        let n = 16;
+        let mut data = vec![(0.0f32, 0.0f32); n];
+        data[0] = (1.0, 0.0);
+        fft_pow2(&mut data);
+        for (k, &bin) in data.iter().enumerate() {
+            assert!(
+                (bin_mag(bin) - 1.0).abs() < 1e-5,
+                "bin {k} not unit magnitude: {bin:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn fft_of_single_sinusoid_concentrates_in_one_bin() {
+        // x[n] = exp(j2π·n/N) is a full-period tone → all energy in bin 1.
+        let n = 32;
+        let mut data: Vec<(f32, f32)> = (0..n)
+            .map(|k| {
+                let ph = 2.0 * PI * k as f32 / n as f32;
+                (ph.cos(), ph.sin())
+            })
+            .collect();
+        fft_pow2(&mut data);
+        let mags: Vec<f32> = data.iter().map(|&b| bin_mag(b)).collect();
+        // Bin 1 should hold ~N; all others ~0.
+        assert!((mags[1] - n as f32).abs() < 1e-3, "bin 1 = {}", mags[1]);
+        for (k, &m) in mags.iter().enumerate() {
+            if k != 1 {
+                assert!(m < 1e-3, "stray energy in bin {k}: {m}");
+            }
+        }
+    }
+
+    // --- Power spectrum -----------------------------------------------------
+
+    #[test]
+    fn power_spectrum_empty_or_zero_bins_is_empty() {
+        assert!(power_spectrum(&[], 64).is_empty());
+        assert!(power_spectrum(&[Iq::new(1.0, 0.0); 8], 0).is_empty());
+    }
+
+    #[test]
+    fn power_spectrum_length_matches_display_bins() {
+        let iq = vec![Iq::new(0.3, -0.1); 1000];
+        for &bins in &[1usize, 7, 64, 128, 333] {
+            assert_eq!(power_spectrum(&iq, bins).len(), bins);
+        }
+    }
+
+    #[test]
+    fn power_spectrum_values_are_finite_and_in_unit_range() {
+        // Mix of tone + offset; every output must be a real number in [0, 1].
+        let n = 1024;
+        let iq: Vec<Iq> = (0..n)
+            .map(|k| {
+                let ph = 2.0 * PI * 0.12 * k as f32;
+                Iq::new(ph.cos() + 0.01, ph.sin())
+            })
+            .collect();
+        let spec = power_spectrum(&iq, 100);
+        assert_eq!(spec.len(), 100);
+        for (k, &v) in spec.iter().enumerate() {
+            assert!(v.is_finite(), "non-finite at {k}: {v}");
+            assert!((0.0..=1.0).contains(&v), "out of range at {k}: {v}");
+        }
+    }
+
+    #[test]
+    fn power_spectrum_dc_input_peaks_in_centre() {
+        // Constant (DC) input → all energy at 0 Hz, which fftshift puts in the centre.
+        let n = 512;
+        let iq = vec![Iq::new(1.0, 0.0); n];
+        let bins = 64;
+        let spec = power_spectrum(&iq, bins);
+        let (peak_idx, &peak_val) = spec
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+            .unwrap();
+        // fftshift centres DC at index fft_len/2 → display bin near the middle.
+        assert!(
+            (peak_idx as i64 - (bins as i64 / 2)).abs() <= 1,
+            "DC peak not centred: idx {peak_idx} of {bins}"
+        );
+        assert!(
+            (peak_val - 1.0).abs() < 1e-3,
+            "DC peak not ~1.0: {peak_val}"
+        );
+    }
+
+    #[test]
+    fn power_spectrum_tone_peaks_at_expected_shifted_bin() {
+        // A positive-frequency complex tone exp(j2π·f·n). With fftshift, a positive
+        // frequency must land to the RIGHT of centre, and its bin should dominate.
+        let fft_len = 512usize;
+        let bins = 128usize;
+        let f = 0.125f32; // cycles/sample → FFT bin = f·fft_len = 64.
+        let iq: Vec<Iq> = (0..fft_len)
+            .map(|k| {
+                let ph = 2.0 * PI * f * k as f32;
+                Iq::new(ph.cos(), ph.sin())
+            })
+            .collect();
+        let spec = power_spectrum(&iq, bins);
+
+        // Expected location: FFT bin 64, fftshifted to 64 + fft_len/2 = 320 (mod 512),
+        // then down-binned to display bin 320 * bins / fft_len = 80.
+        let raw_bin = (f * fft_len as f32) as usize; // 64
+        let shifted = (raw_bin + fft_len / 2) % fft_len; // 320
+        let expected_col = shifted * bins / fft_len; // 80
+
+        let (peak_idx, &peak_val) = spec
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+            .unwrap();
+        assert!(
+            (peak_idx as i64 - expected_col as i64).abs() <= 1,
+            "tone peak at {peak_idx}, expected ~{expected_col}"
+        );
+        // Peak is to the right of centre (positive frequency).
+        assert!(peak_idx > bins / 2, "positive tone not right of centre");
+        // Peak saturates near 1.0; far-away bins are much lower.
+        assert!(
+            (peak_val - 1.0).abs() < 1e-3,
+            "tone peak not ~1.0: {peak_val}"
+        );
+        let far = spec[(expected_col + bins / 2) % bins];
+        assert!(
+            far < 0.5,
+            "far bin not suppressed: {far} vs peak {peak_val}"
+        );
+    }
+
+    #[test]
+    fn power_spectrum_is_deterministic() {
+        let n = 600;
+        let iq: Vec<Iq> = (0..n)
+            .map(|k| {
+                let ph = 2.0 * PI * 0.07 * k as f32;
+                Iq::new(ph.cos(), 0.5 * ph.sin())
+            })
+            .collect();
+        let a = power_spectrum(&iq, 80);
+        let b = power_spectrum(&iq, 80);
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn power_spectrum_more_bins_than_fft_len_replicates() {
+        // 4 samples → fft_len 4; ask for 16 columns. Output length must still be 16 and
+        // every value finite & in range (replication path).
+        let iq = vec![
+            Iq::new(1.0, 0.0),
+            Iq::new(0.0, 1.0),
+            Iq::new(-1.0, 0.0),
+            Iq::new(0.0, -1.0),
+        ];
+        let spec = power_spectrum(&iq, 16);
+        assert_eq!(spec.len(), 16);
+        for &v in &spec {
+            assert!(v.is_finite() && (0.0..=1.0).contains(&v));
+        }
     }
 }
