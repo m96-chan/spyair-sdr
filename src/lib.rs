@@ -10,10 +10,15 @@
 //! - [`geo`] — positions, great-circle distance, VHF radio-horizon model.
 //! - [`location`] — [`location::LocationSource`] trait + manual / stubbed sources.
 
+pub mod adsb;
+pub mod dsp;
 pub mod error;
 pub mod freqdb;
 pub mod geo;
 pub mod location;
+pub mod planner;
+pub mod scanner;
+pub mod tui;
 
 pub use error::{Error, Result};
 pub use geo::{antenna_horizon_km, radio_horizon_km, GeoPosition};
