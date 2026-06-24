@@ -10,6 +10,10 @@
 //! [`crate::error::Error::NotImplemented`] until a dongle is present (tracked in #10) — it never
 //! fabricates a device list.
 
+mod rtlsdr;
+
+pub use rtlsdr::{decode_rtl_iq, RtlSdrSource};
+
 use crate::error::{Error, Result};
 use crate::scanner::SdrSource;
 
