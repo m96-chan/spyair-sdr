@@ -15,6 +15,7 @@ pub mod dsp;
 pub mod error;
 pub mod freqdb;
 pub mod geo;
+pub mod gps;
 pub mod ipgeo;
 pub mod location;
 pub mod planner;

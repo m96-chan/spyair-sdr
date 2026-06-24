@@ -55,10 +55,11 @@ impl LocationSource for ManualLocationSource {
     }
 }
 
-/// GPS-backed source (serial NMEA / `gpsd`). **Not yet implemented** — requires hardware.
-///
-/// Tracked separately; see the epic's "NOT implementable" matrix. Returns
-/// [`Error::NotImplemented`] rather than a fabricated fix.
+/// GPS-backed source (serial NMEA / `gpsd`). The live byte transport is **not yet implemented** —
+/// it requires hardware (issue #12) and returns [`Error::NotImplemented`] rather than a fabricated
+/// fix. The NMEA decoding it will feed on *is* implemented and tested: see [`crate::gps`]
+/// ([`crate::gps::parse_sentence`], [`crate::gps::position_from_nmea`],
+/// [`crate::gps::resolve_position`] over a [`crate::gps::NmeaSource`]).
 #[derive(Debug, Clone, Copy, Default)]
 pub struct GpsLocationSource;
 
