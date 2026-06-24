@@ -11,6 +11,7 @@
 //! - [`location`] — [`location::LocationSource`] trait + manual / stubbed sources.
 
 pub mod error;
+pub mod freqdb;
 pub mod geo;
 pub mod location;
 

@@ -9,7 +9,13 @@ repository = "https://github.com/m96-chan/spyair-sdr"
 
 [dependencies]
 thiserror = "1"
+rusqlite = { version = "0.31", features = ["bundled"] }
+csv = "1"
 
 [lib]
 name = "spyair_sdr"
 path = "src/lib.rs"
+
+[[bin]]
+name = "build-db"
+path = "src/bin/build_db.rs"

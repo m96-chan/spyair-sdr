@@ -30,4 +30,20 @@ pub enum Error {
     /// this rather than a fabricated/mocked value.
     #[error("not implemented: {0}")]
     NotImplemented(&'static str),
+
+    /// The frequency database (or a build input) was malformed.
+    #[error("frequency database error: {0}")]
+    FreqDb(String),
+
+    /// An underlying I/O failure (file reads during the DB build, etc.).
+    #[error("io error: {0}")]
+    Io(#[from] std::io::Error),
+
+    /// A CSV parsing failure while reading OurAirports inputs.
+    #[error("csv error: {0}")]
+    Csv(#[from] csv::Error),
+
+    /// An underlying SQLite failure.
+    #[error("sqlite error: {0}")]
+    Sqlite(#[from] rusqlite::Error),
 }
