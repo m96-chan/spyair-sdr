@@ -46,4 +46,13 @@ pub enum Error {
     /// An underlying SQLite failure.
     #[error("sqlite error: {0}")]
     Sqlite(#[from] rusqlite::Error),
+
+    /// A real SDR device boundary failed at run time (open/tune/read via librtlsdr).
+    ///
+    /// Distinct from [`Error::NotImplemented`]: that variant marks a capability that is
+    /// absent from this build, whereas `Device` carries a genuine hardware/driver failure
+    /// from an implemented backend (e.g. the dongle is busy, unplugged, or returned an
+    /// error). Used only by the real `rtlsdr`-feature backend.
+    #[error("sdr device error: {0}")]
+    Device(String),
 }
