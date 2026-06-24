@@ -11,6 +11,7 @@
 //! - [`location`] — [`location::LocationSource`] trait + manual / stubbed sources.
 
 pub mod adsb;
+pub mod audio;
 pub mod dsp;
 pub mod error;
 pub mod freqdb;
