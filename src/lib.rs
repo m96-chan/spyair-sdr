@@ -18,6 +18,7 @@ pub mod geo;
 pub mod location;
 pub mod planner;
 pub mod scanner;
+pub mod sdr;
 pub mod tui;
 
 pub use error::{Error, Result};

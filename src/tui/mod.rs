@@ -309,6 +309,103 @@ pub fn render(frame: &mut Frame, area: Rect, view: &TuiView) {
     }
 }
 
+/// One row in the device picker. Mirrors the fields of `crate::sdr::SdrDeviceInfo` without
+/// depending on it, keeping the TUI decoupled from the SDR layer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeviceRow {
+    /// Device index.
+    pub index: u32,
+    /// Human-readable device name.
+    pub name: String,
+    /// Device serial string.
+    pub serial: String,
+}
+
+/// Interactive picker shown when several SDR devices are present and none was selected.
+///
+/// This is the **fallback** path: headless runs auto-select or use a flag/config selector and never
+/// construct this. The picker owns only selection *state*; it performs no I/O.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DevicePicker {
+    /// Candidate devices, in display order.
+    pub devices: Vec<DeviceRow>,
+    /// Index of the highlighted row (clamped to `devices`).
+    pub selected: usize,
+}
+
+impl DevicePicker {
+    /// Build a picker over the given devices, highlighting the first.
+    pub fn new(devices: Vec<DeviceRow>) -> Self {
+        Self {
+            devices,
+            selected: 0,
+        }
+    }
+
+    /// Move the highlight down one row (saturating at the last device).
+    pub fn next(&mut self) {
+        if !self.devices.is_empty() && self.selected + 1 < self.devices.len() {
+            self.selected += 1;
+        }
+    }
+
+    /// Move the highlight up one row (saturating at the first device).
+    pub fn prev(&mut self) {
+        self.selected = self.selected.saturating_sub(1);
+    }
+
+    /// The currently highlighted device, if any.
+    pub fn selected_device(&self) -> Option<&DeviceRow> {
+        self.devices.get(self.selected)
+    }
+}
+
+/// Render the device picker: one row per device, the highlighted row marked and bold.
+///
+/// Fully determined by the picker state, so the same state renders the same buffer.
+pub fn render_device_picker(frame: &mut Frame, area: Rect, picker: &DevicePicker) {
+    let rows: Vec<Row> = picker
+        .devices
+        .iter()
+        .enumerate()
+        .map(|(i, d)| {
+            let marker = if i == picker.selected { ">" } else { " " };
+            let style = if i == picker.selected {
+                Style::default().add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+            Row::new(vec![
+                Cell::from(marker),
+                Cell::from(d.index.to_string()),
+                Cell::from(d.name.clone()),
+                Cell::from(d.serial.clone()),
+            ])
+            .style(style)
+        })
+        .collect();
+
+    let widths = [
+        Constraint::Length(1),
+        Constraint::Length(3),
+        Constraint::Min(10),
+        Constraint::Length(16),
+    ];
+    let table = Table::new(rows, widths)
+        .header(Row::new(vec![
+            Cell::from(" "),
+            Cell::from("Idx"),
+            Cell::from("Device"),
+            Cell::from("Serial"),
+        ]))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Select SDR device"),
+        );
+    frame.render_widget(table, area);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -533,5 +630,68 @@ mod tests {
         assert!(s.contains("Watchlist"), "watchlist missing: {s}");
         assert!(s.contains("Equalizer"), "equalizer missing: {s}");
         assert!(s.contains("Waterfall"), "waterfall missing: {s}");
+    }
+
+    fn sample_devices() -> Vec<DeviceRow> {
+        vec![
+            DeviceRow {
+                index: 0,
+                name: "RTL2832U OEM".into(),
+                serial: "00000001".into(),
+            },
+            DeviceRow {
+                index: 1,
+                name: "RTL-SDR Blog V4".into(),
+                serial: "00000002".into(),
+            },
+        ]
+    }
+
+    #[test]
+    fn device_picker_renders_all_devices() {
+        let picker = DevicePicker::new(sample_devices());
+        let mut terminal = Terminal::new(TestBackend::new(60, 10)).expect("terminal");
+        terminal
+            .draw(|f| render_device_picker(f, f.area(), &picker))
+            .expect("draw");
+        let s = buffer_to_string(&terminal);
+        assert!(s.contains("Select SDR device"), "title missing: {s}");
+        assert!(s.contains("RTL2832U OEM"), "device 0 missing: {s}");
+        assert!(s.contains("RTL-SDR Blog V4"), "device 1 missing: {s}");
+        assert!(s.contains("00000002"), "serial missing: {s}");
+    }
+
+    #[test]
+    fn device_picker_render_is_deterministic() {
+        let picker = DevicePicker::new(sample_devices());
+        let render_once = || {
+            let mut t = Terminal::new(TestBackend::new(60, 10)).expect("terminal");
+            t.draw(|f| render_device_picker(f, f.area(), &picker))
+                .expect("draw");
+            buffer_to_string(&t)
+        };
+        assert_eq!(render_once(), render_once());
+    }
+
+    #[test]
+    fn device_picker_navigation_and_selection() {
+        let mut picker = DevicePicker::new(sample_devices());
+        assert_eq!(picker.selected_device().map(|d| d.index), Some(0));
+        picker.next();
+        assert_eq!(picker.selected_device().map(|d| d.index), Some(1));
+        // saturates at the last device
+        picker.next();
+        assert_eq!(picker.selected_device().map(|d| d.index), Some(1));
+        picker.prev();
+        assert_eq!(picker.selected_device().map(|d| d.index), Some(0));
+        // saturates at the first
+        picker.prev();
+        assert_eq!(picker.selected_device().map(|d| d.index), Some(0));
+    }
+
+    #[test]
+    fn empty_device_picker_has_no_selection() {
+        let picker = DevicePicker::new(vec![]);
+        assert_eq!(picker.selected_device(), None);
     }
 }

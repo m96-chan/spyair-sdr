@@ -59,10 +59,11 @@ GPS/IP → Locator → Planner (← spyair.db) → Scanner → Audio / TUI / Whi
 | `geo` | ✅ | `GeoPosition`, haversine, VHF radio-horizon model. |
 | `location` | ✅ (manual) | `LocationSource` trait; GPS/IP are `NotImplemented` stubs. |
 | `freqdb` | ✅ | Service EN/JP mapping, OurAirports→SQLite, `build-db` binary. |
-| `planner` | ⬜ | Receivability scoring + in-range filtering. Next. |
-| `dsp` | ⬜ | AM/FM demod, squelch. Pure math, testable. |
-| `scanner` | ⬜ | Channel-hop/hold/priority/lockout state machine over a `trait SdrSource`. |
-| `tui` | ⬜ | `ratatui` `TestBackend` snapshot tests. |
+| `planner` | ✅ | Receivability scoring + in-range filtering. |
+| `dsp` | ✅ | AM/FM demod, squelch with hysteresis. Pure math. |
+| `scanner` | ✅ | Channel-hop/hold/priority/lockout state machine over a `trait SdrSource`. |
+| `tui` | ✅ | `ratatui` `TestBackend` rendering (now-playing, watchlist, EQ/waterfall, device picker). |
+| `sdr` | ✅ | Device model + selection policy + `SdrEnumerator` trait; real enumerator is a `NotImplemented` stub. |
 | Hardware/external | 🔒 | RTL-SDR I/O, audio out, GPS, IP geo, Whisper, RepeaterBook, live ADS-B — trait + `NotImplemented`, tracked individually. |
 
 ---
